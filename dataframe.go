@@ -5,6 +5,7 @@ package dataset
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,10 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-	
+
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
-	
+
 	"github.com/oarkflow/dataset/series"
 )
 
@@ -36,7 +37,7 @@ type DataFrame struct {
 	columns []series.Series
 	ncols   int
 	nrows   int
-	
+
 	err error
 }
 
@@ -45,7 +46,7 @@ func New(se ...series.Series) DataFrame {
 	if len(se) == 0 {
 		return DataFrame{err: fmt.Errorf("empty DataFrame")}
 	}
-	
+
 	columns := make([]series.Series, len(se))
 	for i, s := range se {
 		columns[i] = s.Copy()
@@ -54,7 +55,7 @@ func New(se ...series.Series) DataFrame {
 	if err != nil {
 		return DataFrame{err: err}
 	}
-	
+
 	// Fill DataFrame base structure
 	df := DataFrame{
 		columns: columns,
@@ -74,13 +75,13 @@ func FromSeries(se ...series.Series) DataFrame {
 	if len(se) == 0 {
 		return DataFrame{err: fmt.Errorf("empty DataFrame")}
 	}
-	
+
 	columns := se
 	nrows, ncols, err := checkColumnsDimensions(columns...)
 	if err != nil {
 		return DataFrame{err: err}
 	}
-	
+
 	// Fill DataFrame base structure
 	df := DataFrame{
 		columns: columns,
@@ -142,21 +143,21 @@ func (df DataFrame) print(
 	maxRows int,
 	maxCharsTotal int,
 	class string) (str string) {
-	
+
 	addRightPadding := func(s string, nchar int) string {
 		if utf8.RuneCountInString(s) < nchar {
 			return s + strings.Repeat(" ", nchar-utf8.RuneCountInString(s))
 		}
 		return s
 	}
-	
+
 	addLeftPadding := func(s string, nchar int) string {
 		if utf8.RuneCountInString(s) < nchar {
 			return strings.Repeat(" ", nchar-utf8.RuneCountInString(s)) + s
 		}
 		return s
 	}
-	
+
 	if df.err != nil {
 		str = fmt.Sprintf("%s error: %v", class, df.err)
 		return
@@ -179,11 +180,11 @@ func (df DataFrame) print(
 	} else {
 		records = df.Records()
 	}
-	
+
 	if showDims {
 		str += fmt.Sprintf("[%dx%d] %s\n\n", nrows, ncols, class)
 	}
-	
+
 	// Add the row numbers
 	for i := 0; i < df.nrows+1; i++ {
 		add := ""
@@ -205,18 +206,18 @@ func (df DataFrame) print(
 		typesrow[i] = fmt.Sprintf("<%v>", types[i])
 	}
 	typesrow = append([]string{""}, typesrow...)
-	
+
 	if showTypes {
 		records = append(records, typesrow)
 	}
-	
+
 	maxChars := make([]int, df.ncols+1)
 	for i := 0; i < len(records); i++ {
 		for j := 0; j < df.ncols+1; j++ {
 			// Escape special characters
 			records[i][j] = strconv.Quote(records[i][j])
 			records[i][j] = records[i][j][1 : len(records[i][j])-1]
-			
+
 			// Detect maximum number of characters per column
 			if len(records[i][j]) > maxChars[j] {
 				maxChars[j] = utf8.RuneCountInString(records[i][j])
@@ -443,7 +444,7 @@ func (df DataFrame) GroupBy(colnames ...string) *Groups {
 			return &Groups{Err: fmt.Errorf("GroupBy: can't find column name: %s", c)}
 		}
 	}
-	
+
 	for _, s := range df.Maps() {
 		// Gen Key for per Series
 		key := ""
@@ -468,13 +469,13 @@ func (df DataFrame) GroupBy(colnames ...string) *Groups {
 		}
 		groupSeries[key] = append(groupSeries[key], s)
 	}
-	
+
 	// Save column types
 	colTypes := map[string]series.Type{}
 	for _, c := range df.columns {
 		colTypes[c.Name()] = c.Type()
 	}
-	
+
 	for k, cMaps := range groupSeries {
 		groupDataFrame[k] = LoadMaps(cMaps, WithTypes(colTypes))
 	}
@@ -545,14 +546,14 @@ func (gps Groups) Aggregation(typs []AggregationType, colnames []string) DataFra
 				value = float64(curSeries.Len())
 			default:
 				return DataFrame{err: fmt.Errorf("Aggregation: this method %s not found", typs[i])}
-				
+
 			}
 			curMap[buildAggregatedColname(c, typs[i])] = value
 		}
 		dfMaps = append(dfMaps, curMap)
-		
+
 	}
-	
+
 	// Save column types
 	colTypes := map[string]series.Type{}
 	for k := range dfMaps[0] {
@@ -567,7 +568,7 @@ func (gps Groups) Aggregation(typs []AggregationType, colnames []string) DataFra
 			continue
 		}
 	}
-	
+
 	gps.aggregation = LoadMaps(dfMaps, WithTypes(colTypes))
 	return gps.aggregation
 }
@@ -588,7 +589,7 @@ func (df DataFrame) Rename(newname, oldname string) DataFrame {
 	if idx == -1 {
 		return DataFrame{err: fmt.Errorf("rename: can't find column name")}
 	}
-	
+
 	copy := df.Copy()
 	copy.columns[idx].SetName(newname)
 	return copy
@@ -621,7 +622,7 @@ func (df DataFrame) RBind(dfb DataFrame) DataFrame {
 		if idx == -1 {
 			return DataFrame{err: fmt.Errorf("rbind: column names are not compatible")}
 		}
-		
+
 		originalSeries := df.columns[k]
 		addedSeries := dfb.columns[idx]
 		newSeries := originalSeries.Concat(addedSeries)
@@ -642,7 +643,7 @@ func (df DataFrame) Concat(dfb DataFrame) DataFrame {
 	if dfb.err != nil {
 		return dfb
 	}
-	
+
 	uniques := make(map[string]struct{})
 	cols := []string{}
 	for _, t := range []DataFrame{df, dfb} {
@@ -653,12 +654,12 @@ func (df DataFrame) Concat(dfb DataFrame) DataFrame {
 			}
 		}
 	}
-	
+
 	expandedSeries := make([]series.Series, len(cols))
 	for k, v := range cols {
 		aidx := findInStringSlice(v, df.Names())
 		bidx := findInStringSlice(v, dfb.Names())
-		
+
 		// aidx and bidx must not be -1 at the same time.
 		var a, b series.Series
 		if aidx != -1 {
@@ -687,7 +688,7 @@ func (df DataFrame) Mutate(ss ...series.Series) DataFrame {
 	if df.err != nil || len(ss) == 0 {
 		return df
 	}
-	
+
 	slen := ss[0].Len()
 	for i := 1; i < len(ss); i++ {
 		if slen != ss[i].Len() {
@@ -708,7 +709,7 @@ func (df DataFrame) Mutate(ss ...series.Series) DataFrame {
 			columns = append(columns, ss[i])
 		}
 	}
-	
+
 	nrows, ncols, err := checkColumnsDimensions(columns...)
 	if err != nil {
 		return DataFrame{err: err}
@@ -769,7 +770,7 @@ func (df DataFrame) FilterAggregation(agg Aggregation, filters ...F) DataFrame {
 	if df.err != nil {
 		return df
 	}
-	
+
 	compResults := make([]series.Series, len(filters))
 	for i, f := range filters {
 		var idx int
@@ -787,11 +788,11 @@ func (df DataFrame) FilterAggregation(agg Aggregation, filters ...F) DataFrame {
 		}
 		compResults[i] = res
 	}
-	
+
 	if len(compResults) == 0 {
 		return df.Copy()
 	}
-	
+
 	res, err := compResults[0].Bool()
 	if err != nil {
 		return DataFrame{err: fmt.Errorf("filter: %v", err)}
@@ -839,7 +840,7 @@ func (df DataFrame) Arrange(order ...Order) DataFrame {
 	if len(order) == 0 {
 		return DataFrame{err: fmt.Errorf("rename: no arguments")}
 	}
-	
+
 	// Check that all colnames exist before starting to sort
 	for i := 0; i < len(order); i++ {
 		colname := order[i].Colname
@@ -847,14 +848,14 @@ func (df DataFrame) Arrange(order ...Order) DataFrame {
 			return DataFrame{err: fmt.Errorf("colname %s doesn't exist", colname)}
 		}
 	}
-	
+
 	// Initialize the index that will be used to store temporary and final order
 	// results.
 	origIdx := make([]int, df.nrows)
 	for i := 0; i < df.nrows; i++ {
 		origIdx[i] = i
 	}
-	
+
 	swapOrigIdx := func(newidx []int) {
 		newOrigIdx := make([]int, len(newidx))
 		for k, i := range newidx {
@@ -862,7 +863,7 @@ func (df DataFrame) Arrange(order ...Order) DataFrame {
 		}
 		origIdx = newOrigIdx
 	}
-	
+
 	suborder := origIdx
 	for i := len(order) - 1; i >= 0; i-- {
 		colname := order[i].Colname
@@ -896,7 +897,7 @@ func (df DataFrame) Rapply(f func(series.Series) series.Series) DataFrame {
 	if df.err != nil {
 		return df
 	}
-	
+
 	detectType := func(types []series.Type) series.Type {
 		var hasStrings, hasFloats, hasInts, hasBools bool
 		for _, t := range types {
@@ -924,11 +925,11 @@ func (df DataFrame) Rapply(f func(series.Series) series.Series) DataFrame {
 			panic("type not supported")
 		}
 	}
-	
+
 	// Detect row type prior to function application
 	types := df.Types()
 	rowType := detectType(types)
-	
+
 	// Create Element matrix
 	elements := make([][]series.Element, df.nrows)
 	rowlen := -1
@@ -941,19 +942,19 @@ func (df DataFrame) Rapply(f func(series.Series) series.Series) DataFrame {
 		if row.Error() != nil {
 			return DataFrame{err: fmt.Errorf("error applying function on row %d: %v", i, row.Error())}
 		}
-		
+
 		if rowlen != -1 && rowlen != row.Len() {
 			return DataFrame{err: fmt.Errorf("error applying function: rows have different lengths")}
 		}
 		rowlen = row.Len()
-		
+
 		rowElems := make([]series.Element, rowlen)
 		for j := 0; j < rowlen; j++ {
 			rowElems[j] = row.Elem(j)
 		}
 		elements[i] = rowElems
 	}
-	
+
 	// Cast columns if necessary
 	columns := make([]series.Series, rowlen)
 	for j := 0; j < rowlen; j++ {
@@ -968,7 +969,7 @@ func (df DataFrame) Rapply(f func(series.Series) series.Series) DataFrame {
 		}
 		columns[j] = s
 	}
-	
+
 	nrows, ncols, err := checkColumnsDimensions(columns...)
 	if err != nil {
 		return DataFrame{err: err}
@@ -995,30 +996,30 @@ type LoadOption func(*loadOptions)
 type loadOptions struct {
 	// Specifies which is the default type in case detectTypes is disabled.
 	defaultType series.Type
-	
+
 	// If set, the type of each column will be automatically detected unless
 	// otherwise specified.
 	detectTypes bool
-	
+
 	// If set, the first row of the tabular structure will be used as column
 	// names.
 	hasHeader bool
-	
+
 	// The names to set as columns names.
 	names []string
-	
+
 	// Defines which values are going to be considered as NaN when parsing from string.
 	nanValues []string
-	
+
 	// Defines the csv delimiter
 	delimiter rune
-	
+
 	// EnablesLazyQuotes
 	lazyQuotes bool
-	
+
 	// Defines the comment delimiter
 	comment rune
-	
+
 	// The types of specific columns can be specified via column name.
 	types map[string]series.Type
 }
@@ -1122,7 +1123,7 @@ func LoadStructs(i interface{}, options ...LoadOption) DataFrame {
 	if i == nil {
 		return DataFrame{err: fmt.Errorf("load: can't create DataFrame from <nil> value")}
 	}
-	
+
 	// Set the default load options
 	cfg := loadOptions{
 		defaultType: series.String,
@@ -1130,12 +1131,12 @@ func LoadStructs(i interface{}, options ...LoadOption) DataFrame {
 		hasHeader:   true,
 		nanValues:   []string{"NA", "NaN", "<nil>"},
 	}
-	
+
 	// Set any custom load options
 	for _, option := range options {
 		option(&cfg)
 	}
-	
+
 	tpy, val := reflect.TypeOf(i), reflect.ValueOf(i)
 	switch tpy.Kind() {
 	case reflect.Slice:
@@ -1146,7 +1147,7 @@ func LoadStructs(i interface{}, options ...LoadOption) DataFrame {
 		if val.Len() == 0 {
 			return DataFrame{err: fmt.Errorf("load: can't create DataFrame from empty slice")}
 		}
-		
+
 		numFields := val.Index(0).Type().NumField()
 		var columns []series.Series
 		for j := 0; j < numFields; j++ {
@@ -1157,7 +1158,7 @@ func LoadStructs(i interface{}, options ...LoadOption) DataFrame {
 			field := val.Index(0).Type().Field(j)
 			fieldName := field.Name
 			fieldType := field.Type.String()
-			
+
 			// Process struct tags
 			fieldTags := field.Tag.Get("dataframe")
 			if fieldTags == "-" {
@@ -1177,7 +1178,7 @@ func LoadStructs(i interface{}, options ...LoadOption) DataFrame {
 					}
 				}
 			}
-			
+
 			// Handle `types` option
 			var t series.Type
 			if cfgtype, ok := cfg.types[fieldName]; ok {
@@ -1195,19 +1196,19 @@ func LoadStructs(i interface{}, options ...LoadOption) DataFrame {
 					t = cfg.defaultType
 				}
 			}
-			
+
 			// Create Series for this field
 			elements := make([]interface{}, val.Len())
 			for i := 0; i < val.Len(); i++ {
 				fieldValue := val.Index(i).Field(j)
 				elements[i] = fieldValue.Interface()
-				
+
 				// Handle `nanValues` option
 				if findInStringSlice(fmt.Sprint(elements[i]), cfg.nanValues) != -1 {
 					elements[i] = nil
 				}
 			}
-			
+
 			// Handle `hasHeader` option
 			if !cfg.hasHeader {
 				tmp := make([]interface{}, 1)
@@ -1246,12 +1247,12 @@ func LoadRecords(records [][]string, options ...LoadOption) DataFrame {
 		hasHeader:   true,
 		nanValues:   []string{"NA", "NaN", "<nil>"},
 	}
-	
+
 	// Set any custom load options
 	for _, option := range options {
 		option(&cfg)
 	}
-	
+
 	if len(records) == 0 {
 		return DataFrame{err: fmt.Errorf("load records: empty DataFrame")}
 	}
@@ -1264,7 +1265,7 @@ func LoadRecords(records [][]string, options ...LoadOption) DataFrame {
 		}
 		return DataFrame{err: fmt.Errorf("load records: not enough column names")}
 	}
-	
+
 	// Extract headers
 	headers := make([]string, len(records[0]))
 	if cfg.hasHeader {
@@ -1274,7 +1275,7 @@ func LoadRecords(records [][]string, options ...LoadOption) DataFrame {
 	if cfg.names != nil {
 		headers = cfg.names
 	}
-	
+
 	types := make([]series.Type, len(headers))
 	rawcols := make([][]string, len(headers))
 	for i, colname := range headers {
@@ -1286,7 +1287,7 @@ func LoadRecords(records [][]string, options ...LoadOption) DataFrame {
 			}
 		}
 		rawcols[i] = rawcol
-		
+
 		t, ok := cfg.types[colname]
 		if !ok {
 			t = cfg.defaultType
@@ -1298,7 +1299,7 @@ func LoadRecords(records [][]string, options ...LoadOption) DataFrame {
 		}
 		types[i] = t
 	}
-	
+
 	columns := make([]series.Series, len(headers))
 	for i, colname := range headers {
 		col := series.New(rawcols[i], types[i], colname)
@@ -1316,7 +1317,7 @@ func LoadRecords(records [][]string, options ...LoadOption) DataFrame {
 		ncols:   ncols,
 		nrows:   nrows,
 	}
-	
+
 	colnames := df.Names()
 	fixColnames(colnames)
 	for i, colname := range colnames {
@@ -1366,6 +1367,17 @@ func LoadMaps(maps []map[string]interface{}, options ...LoadOption) DataFrame {
 	return LoadRecords(records, options...)
 }
 
+// Load creates a new DataFrame based on the given maps. This function assumes
+// that every map on the array represents a row of observations.
+func Load(data any, options ...LoadOption) DataFrame {
+	switch mps := data.(type) {
+	case []map[string]any:
+		return LoadMaps(mps, options...)
+	default:
+		return DataFrame{err: errors.New("no dataset defined")}
+	}
+}
+
 // LoadMatrix loads the given Matrix as a DataFrame
 // TODO: Add Loadoptions
 func LoadMatrix(mat Matrix) DataFrame {
@@ -1407,11 +1419,11 @@ func ReadCSV(r io.Reader, options ...LoadOption) DataFrame {
 	for _, option := range options {
 		option(&cfg)
 	}
-	
+
 	csvReader.Comma = cfg.delimiter
 	csvReader.LazyQuotes = cfg.lazyQuotes
 	csvReader.Comment = cfg.comment
-	
+
 	records, err := csvReader.ReadAll()
 	if err != nil {
 		return DataFrame{err: err}
@@ -1452,22 +1464,22 @@ func (df DataFrame) WriteCSV(w io.Writer, options ...WriteOption) error {
 	if df.err != nil {
 		return df.err
 	}
-	
+
 	// Set the default write options
 	cfg := writeOptions{
 		writeHeader: true,
 	}
-	
+
 	// Set any custom write options
 	for _, option := range options {
 		option(&cfg)
 	}
-	
+
 	records := df.Records()
 	if !cfg.writeHeader {
 		records = records[1:]
 	}
-	
+
 	return csv.NewWriter(w).WriteAll(records)
 }
 
@@ -1496,7 +1508,7 @@ func readRows(trs []*html.Node) [][]string {
 		text := ""
 		for j, td := 0, tr.FirstChild; td != nil; j, td = j+1, td.NextSibling {
 			if td.Type == html.ElementNode && td.DataAtom == atom.Td {
-				
+
 				for len(rems) > 0 {
 					v := rems[0]
 					if v.index > index {
@@ -1509,7 +1521,7 @@ func readRows(trs []*html.Node) [][]string {
 					}
 					index++
 				}
-				
+
 				rowspan, colspan := 1, 1
 				for _, attr := range td.Attr {
 					switch attr.Key {
@@ -1528,7 +1540,7 @@ func readRows(trs []*html.Node) [][]string {
 						text = strings.TrimSpace(c.Data)
 					}
 				}
-				
+
 				for k := 0; k < colspan; k++ {
 					row = append(row, text)
 					if rowspan > 1 {
@@ -1569,12 +1581,12 @@ func ReadHTML(r io.Reader, options ...LoadOption) []DataFrame {
 	var dfs []DataFrame
 	var doc *html.Node
 	var f func(*html.Node)
-	
+
 	doc, err = html.Parse(r)
 	if err != nil {
 		return []DataFrame{DataFrame{err: err}}
 	}
-	
+
 	f = func(n *html.Node) {
 		if n.Type == html.ElementNode && n.DataAtom == atom.Table {
 			trs := []*html.Node{}
@@ -1587,19 +1599,19 @@ func ReadHTML(r io.Reader, options ...LoadOption) []DataFrame {
 					}
 				}
 			}
-			
+
 			df := LoadRecords(readRows(trs), options...)
 			if df.err == nil {
 				dfs = append(dfs, df)
 			}
 			return
 		}
-		
+
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
 			f(c)
 		}
 	}
-	
+
 	f(doc)
 	return dfs
 }
@@ -1705,7 +1717,7 @@ func (df DataFrame) InnerJoin(b DataFrame, keys ...MergeBy) DataFrame {
 	if len(errorArr) != 0 {
 		return DataFrame{err: fmt.Errorf(strings.Join(errorArr, "\n"))}
 	}
-	
+
 	aCols := df.columns
 	bCols := b.columns
 	// Initialize newCols
@@ -1727,7 +1739,7 @@ func (df DataFrame) InnerJoin(b DataFrame, keys ...MergeBy) DataFrame {
 			newCols = append(newCols, bCols[i].Empty())
 		}
 	}
-	
+
 	// Fill newCols
 	for i := 0; i < df.nrows; i++ {
 		for j := 0; j < b.nrows; j++ {
@@ -1784,7 +1796,7 @@ func (df DataFrame) LeftJoin(b DataFrame, keys ...MergeBy) DataFrame {
 	if len(errorArr) != 0 {
 		return DataFrame{err: fmt.Errorf(strings.Join(errorArr, "\n"))}
 	}
-	
+
 	aCols := df.columns
 	bCols := b.columns
 	// Initialize newCols
@@ -1806,7 +1818,7 @@ func (df DataFrame) LeftJoin(b DataFrame, keys ...MergeBy) DataFrame {
 			newCols = append(newCols, bCols[i].Empty())
 		}
 	}
-	
+
 	// Fill newCols
 	for i := 0; i < df.nrows; i++ {
 		matched := false
@@ -1882,7 +1894,7 @@ func (df DataFrame) RightJoin(b DataFrame, keys ...MergeBy) DataFrame {
 	if len(errorArr) != 0 {
 		return DataFrame{err: fmt.Errorf(strings.Join(errorArr, "\n"))}
 	}
-	
+
 	aCols := df.columns
 	bCols := b.columns
 	// Initialize newCols
@@ -1904,7 +1916,7 @@ func (df DataFrame) RightJoin(b DataFrame, keys ...MergeBy) DataFrame {
 			newCols = append(newCols, bCols[i].Empty())
 		}
 	}
-	
+
 	// Fill newCols
 	var yesmatched []struct{ i, j int }
 	var nonmatched []int
@@ -1990,7 +2002,7 @@ func (df DataFrame) OuterJoin(b DataFrame, keys ...MergeBy) DataFrame {
 	if len(errorArr) != 0 {
 		return DataFrame{err: fmt.Errorf(strings.Join(errorArr, "\n"))}
 	}
-	
+
 	aCols := df.columns
 	bCols := b.columns
 	// Initialize newCols
@@ -2012,7 +2024,7 @@ func (df DataFrame) OuterJoin(b DataFrame, keys ...MergeBy) DataFrame {
 			newCols = append(newCols, bCols[i].Empty())
 		}
 	}
-	
+
 	// Fill newCols
 	for i := 0; i < df.nrows; i++ {
 		matched := false
@@ -2138,7 +2150,7 @@ func (df DataFrame) colIndex(s string) int {
 // AddConstant returns new dataframe with new column
 // having constant value with given column name
 func (df DataFrame) AddConstant(value interface{}, colName string) DataFrame {
-	
+
 	var typeOfSeries series.Type
 	switch value.(type) {
 	case int:
@@ -2152,12 +2164,12 @@ func (df DataFrame) AddConstant(value interface{}, colName string) DataFrame {
 	default:
 		log.Fatalln("Unsupported series type")
 	}
-	
+
 	constSlice := make([]interface{}, df.Nrow())
 	for i := range constSlice {
 		constSlice[i] = value
 	}
-	
+
 	constSeries := series.New(constSlice, typeOfSeries, colName)
 	return df.Mutate(constSeries)
 }
@@ -2231,7 +2243,7 @@ func fixColnames(colnames []string) {
 		}
 	}
 	// Now: dupnameidx contains only keys that appeared more than once
-	
+
 	// Autofill missing column names
 	counter := 0
 	for _, i := range missingnames {
@@ -2243,14 +2255,14 @@ func fixColnames(colnames []string) {
 		colnames[i] = proposedName
 		counter++
 	}
-	
+
 	// Sort map keys to make sure it always follows the same order
 	var keys []string
 	for k := range dupnamesidx {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	
+
 	// Add a suffix to the duplicated colnames
 	for _, name := range keys {
 		idx := dupnamesidx[name]
@@ -2361,7 +2373,7 @@ func findType(arr []string) (series.Type, error) {
 		}
 		hasStrings = true
 	}
-	
+
 	switch {
 	case hasStrings:
 		return series.String, nil
@@ -2421,9 +2433,9 @@ func (df DataFrame) Describe() DataFrame {
 		"max",
 	})
 	labels.SetName("column")
-	
+
 	ss := []series.Series{labels}
-	
+
 	for _, col := range df.columns {
 		var newCol series.Series
 		switch col.Type() {
@@ -2462,7 +2474,7 @@ func (df DataFrame) Describe() DataFrame {
 		}
 		ss = append(ss, newCol)
 	}
-	
+
 	ddf := New(ss...)
 	return ddf
 }
@@ -2482,14 +2494,14 @@ func (df DataFrame) Pivot(rows []string, columns []string, values []PivotValue) 
 	if err != nil {
 		return DataFrame{err: err}
 	}
-	
+
 	aggregatedDF := df.aggregateByRowsAndColumns(rows, columns, values)
 	if aggregatedDF.err != nil {
 		return aggregatedDF
 	}
-	
+
 	generatedColnames, generatedColtyps := df.buildGeneratedCols(aggregatedDF, columns, values)
-	
+
 	var rowGroups map[string]DataFrame
 	if len(rows) == 0 {
 		rowGroups = map[string]DataFrame{"": aggregatedDF}
@@ -2502,11 +2514,11 @@ func (df DataFrame) Pivot(rows []string, columns []string, values []PivotValue) 
 	}
 	sort.Strings(rowGroupsKeys)
 	newColnames, newColElements := df.buildNewCols(rows, generatedColnames, len(rowGroupsKeys))
-	
+
 	rowIdx := 0
 	for key, rowGroupDF := range rowGroups {
 		rowIdx = strIndexInStrSlice(rowGroupsKeys, key)
-		
+
 		// fill row
 		for colIdx, colname := range rows {
 			newColElements[colIdx][rowIdx] = rowGroupDF.Col(colname).Elem(0)
@@ -2515,14 +2527,14 @@ func (df DataFrame) Pivot(rows []string, columns []string, values []PivotValue) 
 		for colIdx := range generatedColnames {
 			newColElements[colIdx+len(rows)][rowIdx] = getDefaultElem(generatedColtyps[colIdx])
 		}
-		
+
 		// update value of columns
 		for i := 0; i < rowGroupDF.Nrow(); i++ {
 			colNames := make([]string, 0, len(columns))
 			for _, col := range columns {
 				colNames = append(colNames, rowGroupDF.Col(col).Elem(i).String())
 			}
-			
+
 			for _, valueColumn := range values {
 				aggregatedColname := buildAggregatedColname(valueColumn.Colname, valueColumn.AggregationType)
 				newColNames := append(colNames, aggregatedColname)
@@ -2533,7 +2545,7 @@ func (df DataFrame) Pivot(rows []string, columns []string, values []PivotValue) 
 		}
 		rowIdx++
 	}
-	
+
 	newColumnSlice := make([]series.Series, 0, len(newColnames))
 	for i, colname := range newColnames {
 		var typ series.Type
@@ -2544,7 +2556,7 @@ func (df DataFrame) Pivot(rows []string, columns []string, values []PivotValue) 
 		}
 		newColumnSlice = append(newColumnSlice, series.New(newColElements[i], typ, colname))
 	}
-	
+
 	return New(newColumnSlice...)
 }
 
@@ -2552,7 +2564,7 @@ func (df *DataFrame) checkPivotParams(rows []string, columns []string, values []
 	if len(values) == 0 {
 		return fmt.Errorf("values cannot be empty")
 	}
-	
+
 	usedColumnNames := make(map[string]bool, len(rows)+len(columns)+len(values))
 	dfNames := df.Names()
 	for _, colName := range rows {
@@ -2573,7 +2585,7 @@ func (df *DataFrame) checkPivotParams(rows []string, columns []string, values []
 			return err
 		}
 	}
-	
+
 	for _, value := range values {
 		switch df.Col(value.Colname).Type() {
 		case series.Int, series.Float:
@@ -2609,7 +2621,7 @@ func (df DataFrame) aggregateByRowsAndColumns(rows []string, columns []string, v
 			aggregationTypes = append(aggregationTypes, value.AggregationType)
 		}
 	}
-	
+
 	var selectedColnames []string
 	if len(rows) > 0 {
 		selectedColnames = append(selectedColnames, rows...)
@@ -2621,7 +2633,7 @@ func (df DataFrame) aggregateByRowsAndColumns(rows []string, columns []string, v
 		t := Groups{groups: map[string]DataFrame{"": df}, colnames: valueColnames}
 		return t.Aggregation(aggregationTypes, valueColnames)
 	}
-	
+
 	groups := df.GroupBy(selectedColnames...)
 	if groups.Err != nil {
 		return DataFrame{err: groups.Err}
@@ -2640,7 +2652,7 @@ func (df DataFrame) buildGeneratedCols(aggregatedDF DataFrame, columns []string,
 		}
 		return generatedColnames, generatedColtyps
 	}
-	
+
 	columnGroups := aggregatedDF.GroupBy(columns...).groups
 	generatedColElemsList := make([][]series.Element, 0, len(columnGroups))
 	for _, columnGroupDf := range columnGroups {
@@ -2652,12 +2664,12 @@ func (df DataFrame) buildGeneratedCols(aggregatedDF DataFrame, columns []string,
 		}
 		generatedColElemsList = append(generatedColElemsList, columnElems)
 	}
-	
+
 	// sort generatedColElemsList by elements
 	sort.Slice(generatedColElemsList, func(i, j int) bool {
 		generatedColElemsI := generatedColElemsList[i]
 		generatedColElemsJ := generatedColElemsList[j]
-		
+
 		for idx := range generatedColElemsI {
 			if generatedColElemsI[idx].Less(generatedColElemsJ[idx]) {
 				return true
@@ -2670,7 +2682,7 @@ func (df DataFrame) buildGeneratedCols(aggregatedDF DataFrame, columns []string,
 		// all elements are equal
 		return false
 	})
-	
+
 	generatedColnames := make([]string, 0, len(generatedColElemsList)*len(values))
 	generatedColtyps := make([]series.Type, 0, len(generatedColElemsList)*len(values))
 	for _, generatedColElems := range generatedColElemsList {
@@ -2696,7 +2708,7 @@ func (df DataFrame) buildNewCols(rows []string, generatedColnames []string, rowC
 	if len(generatedColnames) > 0 {
 		newColnames = append(newColnames, generatedColnames...)
 	}
-	
+
 	newColElements := make([][]series.Element, len(newColnames))
 	for i := range newColElements {
 		newColElements[i] = make([]series.Element, rowCnt)
